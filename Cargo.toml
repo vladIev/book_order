@@ -8,4 +8,5 @@ reqwest = { version = "*",  features = ["json"] }
 tokio = { version = "*", features = ["full"] }
 eyre = "*"
 serde_json = "*"
-tokio-tungstenite = "*"
+tokio-tungstenite = { version = "*", features = ["native-tls"]}
+futures-util = {version = "*", default-features = false, features = ["sink", "std"] }
