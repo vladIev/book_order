@@ -1,48 +1,26 @@
 mod book_order;
+mod depth_updates;
 
 use book_order::{BookOrder, DepthUpdateError};
+use depth_updates::DepthUpdate;
 use eyre::Result;
 use futures_util::{Stream, StreamExt, stream::select_all};
 use std::pin::Pin;
 use tokio::{net::TcpStream, sync::mpsc, sync::mpsc::error::TryRecvError};
-use tokio_tungstenite::{
-    MaybeTlsStream, WebSocketStream, connect_async, tungstenite::protocol::Message,
-};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 async fn ws_connect(url: &str) -> WebSocketStream<MaybeTlsStream<TcpStream>> {
     let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
     ws_stream
 }
 
-struct DepthUpdate {
-    first_update_id: u64,
-    last_update_id: u64,
-    value: serde_json::Value,
-}
-
-fn parse_msg(message: Message) -> Option<DepthUpdate> {
-    if let Message::Text(text) = message {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-            if let Some(last_update_id) = json.get("u").and_then(|u| u.as_u64()) {
-                if let Some(first_update_id) = json.get("U").and_then(|u| u.as_u64()) {
-                    return Some(DepthUpdate {
-                        first_update_id,
-                        last_update_id,
-                        value: json,
-                    });
-                }
-            }
-        }
-    }
-    None
-}
-
 async fn init_updates_stream(url: &str, num_of_streams: usize) -> impl Stream<Item = DepthUpdate> {
     let mut streams: Vec<Pin<Box<dyn Stream<Item = DepthUpdate> + Send>>> = Vec::new();
     for _ in 0..num_of_streams {
         let ws = ws_connect(url).await;
-        let read = Box::pin(ws.filter_map(|msg| async { msg.ok().and_then(parse_msg) }))
-            as Pin<Box<dyn Stream<Item = DepthUpdate> + Send>>;
+        let read =
+            Box::pin(ws.filter_map(|msg| async { msg.ok().and_then(DepthUpdate::from_message) }))
+                as Pin<Box<dyn Stream<Item = DepthUpdate> + Send>>;
         streams.push(read);
     }
     select_all(streams)
