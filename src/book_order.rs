@@ -48,31 +48,33 @@ pub struct BookOrder {
     last_update_id: UpdateId,
     bids: OrdersTree,
     asks: OrdersTree,
+    symbol: String,
 }
 
 impl BookOrder {
-    pub fn new(snapshot: &serde_json::Value) -> Result<Self> {
+    pub fn new(symbol: &str, snapshot: &serde_json::Value) -> Result<Self> {
         let bids_json = snapshot
             .get("bids")
-            .ok_or_else(|| eyre::eyre!("No 'bids' field in snapshot"))?;
+            .ok_or_eyre("No 'bids' field in snapshot")?;
 
         let asks_json = snapshot
             .get("asks")
-            .ok_or_else(|| eyre::eyre!("No 'asks' field in snapshot"))?;
+            .ok_or_eyre("No 'asks' field in snapshot")?;
 
         let last_update_id = snapshot
             .get("lastUpdateId")
-            .ok_or_else(|| eyre::eyre!("No 'lastUpdateId' field in snapshot"))?
+            .ok_or_eyre("No 'lastUpdateId' field in snapshot")?
             .as_u64()
-            .ok_or_else(|| eyre::eyre!("Failed to convert lastUpdateId to u64"))?;
+            .ok_or_eyre("Failed to convert lastUpdateId to u64")?;
 
         let bids = Self::build_orders(bids_json)?;
         let asks = Self::build_orders(asks_json)?;
 
         Ok(BookOrder {
-            last_update_id: last_update_id,
-            bids: bids,
-            asks: asks,
+            last_update_id,
+            bids,
+            asks,
+            symbol: symbol.to_string(),
         })
     }
 
@@ -164,16 +166,16 @@ impl BookOrder {
             return Err(eyre::eyre!(error_message));
         }
 
-        let price = order_data[0]
+        let price: f64 = order_data[0]
             .as_str()
             .ok_or_eyre(error_message)?
-            .parse::<f64>()
+            .parse()
             .map_err(|_| eyre::eyre!(error_message))?;
 
-        let volume = order_data[1]
+        let volume: f64 = order_data[1]
             .as_str()
             .ok_or_eyre(error_message)?
-            .parse::<f64>()
+            .parse()
             .map_err(|_| eyre::eyre!(error_message))?;
         let internal_price = f64_to_i64(price)?;
         let internal_volume = f64_to_i64(volume)?;
@@ -200,7 +202,11 @@ impl BookOrder {
 
 impl fmt::Display for BookOrder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "Book last update id: {}", self.last_update_id)?;
+        writeln!(
+            f,
+            "Symbol {}    Book last update id: {}",
+            self.symbol, self.last_update_id
+        )?;
         let header = format!(
             "{:<15}{:<15}  |  {:<15}{:<15}",
             "BID_PRICE", "BID_VOLUME", "ASK_PRICE", "ASK_VOLUME"
@@ -375,10 +381,12 @@ mod tests {
 
             let json: serde_json::Value =
                 serde_json::from_str(input).expect("Failed to load test json");
-            let book = BookOrder::new(&json).expect("Failed to create book from snapshot");
+            let book =
+                BookOrder::new("BTCUSDT", &json).expect("Failed to create book from snapshot");
             assert_eq!(expected_update_id, book.last_update_id);
             assert_eq!(expected_asks, book.asks);
             assert_eq!(expected_bids, book.bids);
+            assert_eq!("BTCUSDT", book.symbol);
         }
 
         #[test]
@@ -471,8 +479,8 @@ mod tests {
                 f64_to_i64(1.0).unwrap(),
             );
 
-            let mut book =
-                BookOrder::new(&snapshot_json).expect("Failed to create book from snapshot");
+            let mut book = BookOrder::new("BTCUSDT", &snapshot_json)
+                .expect("Failed to create book from snapshot");
             book.depth_update(&update_json).expect("Failed to update");
             assert_eq!(expected_asks, book.asks);
             assert_eq!(expected_bids, book.bids);
@@ -527,8 +535,8 @@ mod tests {
                 f64_to_i64(4.30144000).unwrap(),
             );
 
-            let mut book =
-                BookOrder::new(&snapshot_json).expect("Failed to create book from snapshot");
+            let mut book = BookOrder::new("BTCUSDT", &snapshot_json)
+                .expect("Failed to create book from snapshot");
             let result = book.depth_update(&update_json);
             assert!(result.is_ok());
             assert_eq!(expected_asks, book.asks);
@@ -586,8 +594,8 @@ mod tests {
                 f64_to_i64(4.30144000).unwrap(),
             );
 
-            let mut book =
-                BookOrder::new(&snapshot_json).expect("Failed to create book from snapshot");
+            let mut book = BookOrder::new("BTCUSDT", &snapshot_json)
+                .expect("Failed to create book from snapshot");
             let result = book.depth_update(&update_json);
             assert!(result.is_ok());
             assert_eq!(expected_asks, book.asks);
@@ -611,7 +619,8 @@ mod tests {
                 "lastUpdateId": 67621829690
             }"#;
             let expected_string =
-                String::from("BID_PRICE      BID_VOLUME       |  ASK_PRICE      ASK_VOLUME     \n")
+                String::from("Symbol BTCUSDT    Book last update id: 67621829690\n")
+                    + "BID_PRICE      BID_VOLUME       |  ASK_PRICE      ASK_VOLUME     \n"
                     + "=================================================================\n"
                     + "94729.47       5.39833          |  94729.48       4.30144        \n"
                     + "94729.46       0.0003           |  94729.49       0.00197        \n"
@@ -620,7 +629,8 @@ mod tests {
 
             let json: serde_json::Value =
                 serde_json::from_str(input).expect("Failed to load test json");
-            let book = BookOrder::new(&json).expect("Failed to create book from snapshot");
+            let book =
+                BookOrder::new("BTCUSDT", &json).expect("Failed to create book from snapshot");
             println!("{}", book);
             let output = format!("{}", book);
             assert_eq!(expected_string, output);

@@ -131,7 +131,7 @@ impl UpdateProcessor {
             if let Some(update_id) = snapshot_json.get("lastUpdateId").and_then(|u| u.as_u64()) {
                 if update_id >= first_update.first_update_id {
                     let mut book_lock = self.book.lock().await;
-                    *book_lock = Some(BookOrder::new(&snapshot_json)?);
+                    *book_lock = Some(BookOrder::new(symbol, &snapshot_json)?);
                     book_lock
                         .as_mut()
                         .unwrap()
