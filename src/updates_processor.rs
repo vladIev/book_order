@@ -1,25 +1,32 @@
 use crate::book_order::{BookOrder, DepthUpdateError, UpdateId};
 use crate::depth_updates::DepthUpdate;
+
 use eyre::Result;
 use std::sync::Arc;
 use tokio::io::{self, AsyncWriteExt};
-use tokio::sync::Mutex;
 use tokio::sync::mpsc::{Receiver, error::TryRecvError};
+use tokio::sync::{Mutex, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, sleep};
 
 pub struct UpdateProcessor {
     symbol: String,
     rx: Receiver<DepthUpdate>,
+    shutdown_rx: watch::Receiver<bool>,
     book: Arc<Mutex<Option<BookOrder>>>,
     book_printer: Option<JoinHandle<()>>,
 }
 
 impl UpdateProcessor {
-    pub fn new(symbol: &str, rx: Receiver<DepthUpdate>) -> Self {
+    pub fn new(
+        symbol: &str,
+        rx: Receiver<DepthUpdate>,
+        shutdown_rx: watch::Receiver<bool>,
+    ) -> Self {
         UpdateProcessor {
             symbol: symbol.to_string(),
             rx,
+            shutdown_rx,
             book: Arc::new(Mutex::new(None)),
             book_printer: None,
         }
@@ -51,28 +58,47 @@ impl UpdateProcessor {
         let mut current_book_id: UpdateId =
             self.with_book(|book| Ok(book.last_update_id())).await?;
 
-        while let Some(update) = self.rx.recv().await {
-            let mut latest_update = update;
-            loop {
-                match self.rx.try_recv() {
-                    Ok(update) => {
-                        if update.first_update_id > current_book_id + 1 {
-                            current_book_id = self
-                                .with_book(|book| Ok(Self::handle_update(book, &latest_update)?))
-                                .await?;
+        loop {
+            tokio::select! {
+                update_opt = self.rx.recv() => {
+                    match update_opt {
+                        Some(update) => {
+                            let mut latest_update = update;
+                            loop {
+                                match self.rx.try_recv() {
+                                    Ok(update) => {
+                                        if update.first_update_id > current_book_id + 1 {
+                                            current_book_id = self
+                                                .with_book(|book| Ok(Self::handle_update(book, &latest_update)?))
+                                                .await?;
 
-                            latest_update = update;
-                        } else if update.last_update_id > latest_update.last_update_id {
-                            latest_update = update;
+                                            latest_update = update;
+                                        } else if update.last_update_id > latest_update.last_update_id {
+                                            latest_update = update;
+                                        }
+                                    }
+                                    Err(TryRecvError::Empty) => {
+                                        current_book_id = self
+                                            .with_book(|book| Ok(Self::handle_update(book, &latest_update)?))
+                                            .await?;
+                                        break;
+                                    }
+                                    Err(TryRecvError::Disconnected) => {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        None => {
+                            println!("Updates channel closed");
+                            break;
                         }
                     }
-                    Err(TryRecvError::Empty) => {
-                        current_book_id = self
-                            .with_book(|book| Ok(Self::handle_update(book, &latest_update)?))
-                            .await?;
-                        break;
-                    }
-                    Err(TryRecvError::Disconnected) => {
+                }
+
+                changed = self.shutdown_rx.changed() => {
+                    if changed.is_ok() && *self.shutdown_rx.borrow() {
+                        println!("Terminating processor");
                         break;
                     }
                 }
@@ -87,7 +113,7 @@ impl UpdateProcessor {
             if let Some(depth_err) = err.downcast_ref::<DepthUpdateError>() {
                 match depth_err {
                     DepthUpdateError::ParsingError => {
-                        println!("Depth update parsing error");
+                        eprintln!("Depth update parsing error");
                     }
                     DepthUpdateError::InvalidBook => {
                         return Err(eyre::eyre!("Invalid book state"));
