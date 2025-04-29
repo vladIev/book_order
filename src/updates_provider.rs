@@ -3,11 +3,8 @@ use crate::depth_updates::DepthUpdate;
 use eyre::Result;
 use futures_util::{Stream, StreamExt, stream::select_all};
 use std::pin::Pin;
-use tokio::{
-    net::{TcpStream, unix::pipe::Receiver},
-    sync::{mpsc::Sender, watch},
-};
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
+use tokio::sync::{mpsc::Sender, watch};
+use tokio_tungstenite::connect_async;
 
 pub struct UpdatesProvider {
     symbol: String,
@@ -69,15 +66,11 @@ impl UpdatesProvider {
             .map_err(|e| eyre::eyre!("Send error: {}", e))
     }
 
-    async fn ws_connect(url: &str) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>> {
-        let (ws_stream, _) = connect_async(url).await?;
-        Ok(ws_stream)
-    }
-
     async fn init_updates_stream(
         symbol: &str,
         num_of_streams: usize,
     ) -> Result<impl Stream<Item = DepthUpdate>> {
+        let mut retries = 5;
         let url = format!(
             "wss://stream.binance.com:9443/ws/{}@depth",
             symbol.to_lowercase()
@@ -85,12 +78,20 @@ impl UpdatesProvider {
 
         let mut streams: Vec<Pin<Box<dyn Stream<Item = DepthUpdate> + Send>>> = Vec::new();
 
-        for _ in 0..num_of_streams {
-            let ws = Self::ws_connect(&url).await?;
-            let read = Box::pin(
-                ws.filter_map(|msg| async { msg.ok().and_then(DepthUpdate::from_message) }),
-            ) as Pin<Box<dyn Stream<Item = DepthUpdate> + Send>>;
-            streams.push(read);
+        while streams.len() < num_of_streams && retries > 0 {
+            match connect_async(&url).await {
+                Err(e) => {
+                    eprintln!("Failed to establish connection to {}. Error {:?}", url, e);
+                    retries -= 1;
+                }
+                Ok((ws, _)) => {
+                    let read =
+                        Box::pin(ws.filter_map(|msg| async {
+                            msg.ok().and_then(DepthUpdate::from_message)
+                        }));
+                    streams.push(read);
+                }
+            }
         }
         Ok(select_all(streams))
     }
