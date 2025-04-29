@@ -1,30 +1,13 @@
 mod book_order;
 mod depth_updates;
+mod updates_processor;
+mod updates_provider;
 
 use book_order::{BookOrder, DepthUpdateError};
 use depth_updates::DepthUpdate;
 use eyre::Result;
-use futures_util::{Stream, StreamExt, stream::select_all};
-use std::pin::Pin;
-use tokio::{net::TcpStream, sync::mpsc, sync::mpsc::error::TryRecvError};
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
-
-async fn ws_connect(url: &str) -> WebSocketStream<MaybeTlsStream<TcpStream>> {
-    let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
-    ws_stream
-}
-
-async fn init_updates_stream(url: &str, num_of_streams: usize) -> impl Stream<Item = DepthUpdate> {
-    let mut streams: Vec<Pin<Box<dyn Stream<Item = DepthUpdate> + Send>>> = Vec::new();
-    for _ in 0..num_of_streams {
-        let ws = ws_connect(url).await;
-        let read =
-            Box::pin(ws.filter_map(|msg| async { msg.ok().and_then(DepthUpdate::from_message) }))
-                as Pin<Box<dyn Stream<Item = DepthUpdate> + Send>>;
-        streams.push(read);
-    }
-    select_all(streams)
-}
+use tokio::{sync::mpsc, sync::mpsc::error::TryRecvError};
+use updates_provider::UpdatesProvider;
 
 async fn get_snapshot(symbol: &str, limit: i16) -> Result<serde_json::Value> {
     let params = [("symbol", symbol), ("limit", &limit.to_string())];
@@ -79,34 +62,25 @@ fn handle_update(book: &mut BookOrder, update: &DepthUpdate) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut streams =
-        init_updates_stream("wss://stream.binance.com:9443/ws/btcusdt@depth", 3).await;
-
     let (tx, mut rx) = mpsc::channel::<DepthUpdate>(1024);
-    let mut first_update_id: Option<u64> = None;
-    while let Some(update) = streams.next().await {
-        first_update_id = Some(update.last_update_id);
-        if tx.send(update).await.is_err() {
-            println!("Receiver closed, exiting sender task");
-            break;
-        }
+    let updates_receiver = tokio::spawn(async move {
+        let mut depth_updates_provider = UpdatesProvider::new("BTCUSDT", 3, tx);
+        depth_updates_provider.run().await
+    });
+
+    let mut first_update_opt: Option<DepthUpdate> = None;
+    while let Some(update) = rx.recv().await {
+        first_update_opt = Some(update);
         break;
     }
 
-    if first_update_id.is_none() {
+    if first_update_opt.is_none() {
         return Err(eyre::eyre!("Failed to get initial update id"));
     }
 
-    let updates_reciever = tokio::spawn(async move {
-        while let Some(update) = streams.next().await {
-            if tx.send(update).await.is_err() {
-                println!("Receiver closed, exiting sender task");
-                break;
-            }
-        }
-    });
-
-    let mut book = init_book(first_update_id.unwrap(), "BTCUSDT", 10).await?;
+    let first_update = first_update_opt.take().unwrap();
+    let mut book = init_book(first_update.first_update_id, "BTCUSDT", 10).await?;
+    book.depth_update(&first_update.value)?;
     println!("Initial book state:\n{}", book);
 
     tokio::spawn(async move {
@@ -134,6 +108,8 @@ async fn main() -> Result<()> {
         }
     });
 
-    updates_reciever.await.unwrap();
+    if let Err(result) = updates_receiver.await? {
+        println!("Error in updates provider {:#?}", result);
+    }
     Ok(())
 }
