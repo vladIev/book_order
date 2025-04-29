@@ -4,7 +4,7 @@ use crate::depth_updates::DepthUpdate;
 use eyre::Result;
 use std::sync::Arc;
 use tokio::io::{self, AsyncWriteExt};
-use tokio::sync::mpsc::{Receiver, error::TryRecvError};
+use tokio::sync::mpsc::Receiver;
 use tokio::sync::{Mutex, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, sleep};
@@ -63,31 +63,7 @@ impl UpdateProcessor {
                 update_opt = self.rx.recv() => {
                     match update_opt {
                         Some(update) => {
-                            let mut latest_update = update;
-                            loop {
-                                match self.rx.try_recv() {
-                                    Ok(update) => {
-                                        if update.first_update_id > current_book_id + 1 {
-                                            current_book_id = self
-                                                .with_book(|book| Ok(Self::handle_update(book, &latest_update)?))
-                                                .await?;
-
-                                            latest_update = update;
-                                        } else if update.last_update_id > latest_update.last_update_id {
-                                            latest_update = update;
-                                        }
-                                    }
-                                    Err(TryRecvError::Empty) => {
-                                        current_book_id = self
-                                            .with_book(|book| Ok(Self::handle_update(book, &latest_update)?))
-                                            .await?;
-                                        break;
-                                    }
-                                    Err(TryRecvError::Disconnected) => {
-                                        break;
-                                    }
-                                }
-                            }
+                            current_book_id = self.pick_latest_and_apply(update, current_book_id).await?;
                         }
                         None => {
                             println!("Updates channel closed");
@@ -108,26 +84,29 @@ impl UpdateProcessor {
         Ok(())
     }
 
-    fn handle_update(book: &mut BookOrder, update: &DepthUpdate) -> Result<UpdateId> {
-        if let Err(err) = book.depth_update(&update.value) {
-            if let Some(depth_err) = err.downcast_ref::<DepthUpdateError>() {
-                match depth_err {
-                    DepthUpdateError::ParsingError => {
-                        eprintln!("Depth update parsing error");
-                    }
-                    DepthUpdateError::InvalidBook => {
-                        return Err(eyre::eyre!("Invalid book state"));
-                    }
-                }
+    async fn pick_latest_and_apply(
+        &mut self,
+        update: DepthUpdate,
+        mut current_book_id: UpdateId,
+    ) -> Result<UpdateId> {
+        let mut latest = update;
+        while let Ok(update) = self.rx.try_recv() {
+            if update.first_update_id > current_book_id + 1 {
+                current_book_id = self
+                    .with_book(|book| Ok(Self::apply_update(book, &latest)?))
+                    .await?;
+
+                latest = update;
+            } else if update.last_update_id > latest.last_update_id {
+                latest = update;
             }
-        } else {
-            println!(
-                "Update applied succefully. New id {}",
-                book.last_update_id()
-            );
         }
 
-        Ok(book.last_update_id())
+        current_book_id = self
+            .with_book(|book| Ok(Self::apply_update(book, &latest)?))
+            .await?;
+
+        Ok(current_book_id)
     }
 
     async fn with_book<F, R>(&self, f: F) -> Result<R>
@@ -183,6 +162,30 @@ impl UpdateProcessor {
                 }
             })
         })
+    }
+
+    fn apply_update(book: &mut BookOrder, update: &DepthUpdate) -> Result<UpdateId> {
+        match book.depth_update(&update.value) {
+            Err(err) => match err.downcast_ref::<DepthUpdateError>() {
+                Some(DepthUpdateError::ParsingError) => {
+                    eprintln!("Depth update parsing error");
+                }
+                Some(DepthUpdateError::InvalidBook) => {
+                    return Err(eyre::eyre!("Invalid book state"));
+                }
+                None => {
+                    return Err(err);
+                }
+            },
+            Ok(()) => {
+                println!(
+                    "Update applied succefully. New id {}",
+                    book.last_update_id()
+                );
+            }
+        }
+
+        Ok(book.last_update_id())
     }
 
     async fn get_snapshot(symbol: &str, limit: usize) -> Result<serde_json::Value> {
