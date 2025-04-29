@@ -8,7 +8,7 @@ use std::i64;
 
 type Price = i64;
 type Volume = i64;
-type UpdateId = u64;
+pub type UpdateId = u64;
 type OrdersTree = BTreeMap<Price, Volume>;
 
 const SCALE: i64 = 10i64.pow(8);
@@ -28,6 +28,7 @@ pub fn i64_to_f64(internal_value: i64) -> f64 {
 }
 
 #[derive(Debug)]
+
 pub enum DepthUpdateError {
     ParsingError,
     InvalidBook,
@@ -42,7 +43,7 @@ impl fmt::Display for DepthUpdateError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BookOrder {
     last_update_id: UpdateId,
     bids: OrdersTree,

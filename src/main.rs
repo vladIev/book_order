@@ -6,6 +6,7 @@ mod updates_provider;
 use depth_updates::DepthUpdate;
 use eyre::Result;
 use tokio::sync::mpsc;
+use tokio::time::Duration;
 use updates_processor::UpdateProcessor;
 use updates_provider::UpdatesProvider;
 
@@ -17,16 +18,18 @@ async fn main() -> Result<()> {
         depth_updates_provider.run().await
     });
 
-    let updates_processor = tokio::spawn(async move {
-        let mut depth_updates_processor = UpdateProcessor::new("BTCUSDT", rx);
-        loop {
-            if let Ok(e) = depth_updates_processor.run(100).await {
-                println!("Invalid book state. Reiniting...");
-            } else {
-                break;
+    let updates_processor = {
+        tokio::spawn(async move {
+            let mut processor: UpdateProcessor = UpdateProcessor::new("BTCUSDT", rx);
+            loop {
+                if let Err(_e) = processor.run(100, Duration::new(5, 0)).await {
+                    println!("Invalid book state. Reiniting...");
+                } else {
+                    break;
+                }
             }
-        }
-    });
+        })
+    };
 
     if let Err(result) = updates_receiver.await? {
         println!("Error in updates provider {:#?}", result);
