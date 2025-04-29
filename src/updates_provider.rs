@@ -93,6 +93,17 @@ impl UpdatesProvider {
                 }
             }
         }
+
+        match streams.len() {
+            0 => return Err(eyre::eyre!("Failed to establish any connections")),
+            n if n < num_of_streams => {
+                println!(
+                    "Only {} of {} streams established. Proceeding anyway.",
+                    n, num_of_streams
+                );
+            }
+            _ => {}
+        }
         Ok(select_all(streams))
     }
 }

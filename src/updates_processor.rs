@@ -7,7 +7,7 @@ use tokio::io::{self, AsyncWriteExt};
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::{Mutex, watch};
 use tokio::task::JoinHandle;
-use tokio::time::{Duration, sleep};
+use tokio::time::{Duration, sleep, timeout};
 
 pub struct UpdateProcessor {
     symbol: String,
@@ -37,15 +37,17 @@ impl UpdateProcessor {
         snapshot_limit: usize,
         book_printing_interval: Duration,
     ) -> Result<()> {
-        let first_update = self
-            .rx
-            .recv()
-            .await
-            .ok_or_else(|| eyre::eyre!("Failed to get initial update id"))?;
-
-        let symbol = self.symbol.clone();
-        self.init_book(&first_update, &symbol, snapshot_limit)
-            .await?;
+        let first_update = timeout(Duration::from_secs(30), self.rx.recv()).await;
+        match first_update {
+            Ok(Some(update)) => {
+                let symbol = self.symbol.clone();
+                self.init_book(&update, &symbol, snapshot_limit).await?;
+            }
+            Ok(None) => {
+                return Ok(());
+            }
+            Err(_) => return Err(eyre::eyre!("Failed to get initial update id")),
+        }
 
         if self.book_printer.is_none() {
             self.start_book_printer_job(book_printing_interval).await;
@@ -177,19 +179,17 @@ impl UpdateProcessor {
                     return Err(err);
                 }
             },
-            Ok(()) => {
-                println!(
-                    "Update applied succefully. New id {}",
-                    book.last_update_id()
-                );
-            }
+            Ok(()) => {}
         }
 
         Ok(book.last_update_id())
     }
 
     async fn get_snapshot(symbol: &str, limit: usize) -> Result<serde_json::Value> {
-        let params = [("symbol", symbol), ("limit", &limit.to_string())];
+        let params = [
+            ("symbol", symbol.to_uppercase()),
+            ("limit", limit.to_string()),
+        ];
         let client = reqwest::Client::new();
 
         let response: serde_json::Value = client
