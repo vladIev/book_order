@@ -3,7 +3,6 @@ use crate::depth_updates::DepthUpdate;
 
 use eyre::Result;
 use std::sync::Arc;
-use tokio::io::{self, AsyncWriteExt};
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::{Mutex, watch};
 use tokio::task::JoinHandle;
@@ -67,15 +66,16 @@ impl UpdateProcessor {
 
         loop {
             tokio::select! {
-                update_opt = self.rx.recv() => {
+                update_opt = timeout(Duration::from_secs(5), self.rx.recv()) => {
                     match update_opt {
-                        Some(update) => {
+                        Ok(Some(update)) => {
                             current_book_id = self.pick_latest_and_apply(update, current_book_id).await?;
                         }
-                        None => {
+                        Ok(None) => {
                             println!("Updates channel closed");
                             break;
                         }
+                        Err(_)=>{println!("Timed out on new update");}
                     }
                 }
 

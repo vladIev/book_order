@@ -2,8 +2,11 @@ use crate::depth_updates::DepthUpdate;
 
 use eyre::Result;
 use futures_util::{Stream, StreamExt, stream::select_all};
-use std::pin::Pin;
-use tokio::sync::{mpsc::Sender, watch};
+use std::{pin::Pin, time::Duration};
+use tokio::{
+    sync::{mpsc::Sender, watch},
+    time::sleep,
+};
 use tokio_tungstenite::connect_async;
 
 pub struct UpdatesProvider {
@@ -70,6 +73,7 @@ impl UpdatesProvider {
         symbol: &str,
         num_of_streams: usize,
     ) -> Result<impl Stream<Item = DepthUpdate>> {
+        let retry_interval = Duration::from_secs(3);
         let mut retries = 5;
         let url = format!(
             "wss://stream.binance.com:9443/ws/{}@depth",
@@ -83,6 +87,7 @@ impl UpdatesProvider {
             match connect_async(&url).await {
                 Err(e) => {
                     eprintln!("Failed to establish connection to {}. Error {:?}", url, e);
+                    sleep(retry_interval).await;
                     retries -= 1;
                 }
                 Ok((ws, _)) => {

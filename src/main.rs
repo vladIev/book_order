@@ -16,7 +16,7 @@ use updates_provider::UpdatesProvider;
 #[command(name = "my_app")]
 struct Args {
     /// Trading symbol like BTCUSDT
-    #[arg(short('s'), long)]
+    #[arg(short('s'), long, default_value_t = String::from("BTCUSDT"))]
     symbol: String,
 
     /// Number of web sockets to open. Max = 3
