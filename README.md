@@ -2,8 +2,11 @@
 This project implements a real-time order book tracker for a selected trading pair on Binance. 
 
 ## Build
+
+```
 cargo build
 cargo run
+```
 
 ## Usage
 ```book_order [OPTIONS]
