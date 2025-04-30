@@ -34,6 +34,9 @@ async fn main() -> Result<()> {
     if args.streams > 3 {
         return Err(eyre::eyre!("To many streams. Max 3"));
     }
+    if args.limit > 5000 {
+        return Err(eyre::eyre!("Limit is too big. Max 5000"));
+    }
     let (updates_tx, updates_rx) = mpsc::channel::<DepthUpdate>(1024);
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 

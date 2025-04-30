@@ -79,6 +79,7 @@ impl UpdatesProvider {
         let mut streams: Vec<Pin<Box<dyn Stream<Item = DepthUpdate> + Send>>> = Vec::new();
 
         while streams.len() < num_of_streams && retries > 0 {
+            println!("Connecting to {}", url);
             match connect_async(&url).await {
                 Err(e) => {
                     eprintln!("Failed to establish connection to {}. Error {:?}", url, e);
@@ -90,6 +91,7 @@ impl UpdatesProvider {
                             msg.ok().and_then(DepthUpdate::from_message)
                         }));
                     streams.push(read);
+                    println!("Connection established");
                 }
             }
         }

@@ -37,9 +37,14 @@ impl UpdateProcessor {
         snapshot_limit: usize,
         book_printing_interval: Duration,
     ) -> Result<()> {
+        println!("Processor is waiting for the first event");
         let first_update = timeout(Duration::from_secs(30), self.rx.recv()).await;
         match first_update {
             Ok(Some(update)) => {
+                println!(
+                    "Requesting snapshot. Min snaphost updat id: {}",
+                    update.first_update_id
+                );
                 let symbol = self.symbol.clone();
                 self.init_book(&update, &symbol, snapshot_limit).await?;
             }
@@ -132,13 +137,17 @@ impl UpdateProcessor {
             let snapshot_json = Self::get_snapshot(symbol, limit).await?;
             if let Some(update_id) = snapshot_json.get("lastUpdateId").and_then(|u| u.as_u64()) {
                 if update_id >= first_update.first_update_id {
+                    println!("Snapshot obtained. Building book order");
                     let mut book_lock = self.book.lock().await;
                     *book_lock = Some(BookOrder::new(symbol, &snapshot_json)?);
+                    println!("Book is ready");
                     book_lock
                         .as_mut()
                         .unwrap()
                         .depth_update(&first_update.value)?;
                     break;
+                } else {
+                    println!("Snapshot it too old. Retrying");
                 }
             }
         }
@@ -156,9 +165,7 @@ impl UpdateProcessor {
                         book_lock.as_ref().cloned()
                     };
                     if let Some(book) = cloned_book {
-                        let _ = io::stdout()
-                            .write_all(format!("\n{}\n", book).as_bytes())
-                            .await;
+                        println!("\n{}\n", book);
                     }
                     sleep(interval).await;
                 }
