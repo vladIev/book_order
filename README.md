@@ -44,6 +44,6 @@ Options:
     Important: this must be the result of applying updates to the snapshot, not just a dump of incoming data.
 
 ## Components
-[book_order.rc](https://github.com/vladIev/book_order/blob/master/src/book_order.rs) - Stores price levels and implements the logic for maintaining the order book.
-[updates_provider.rc](https://github.com/vladIev/book_order/blob/master/src/updates_provider.rs) - Starts num_of_sockets subscriptions for depth updates for the given symbol and sends received updates through the tx channel.
-[updates_provider.rc](https://github.com/vladIev/book_order/blob/master/src/updates_provider.rs) - Handles depth updates received from `updates_provider.rc`.
+* [book_order.rc](https://github.com/vladIev/book_order/blob/master/src/book_order.rs) - Stores price levels and implements the logic for maintaining the order book.
+* [updates_provider.rc](https://github.com/vladIev/book_order/blob/master/src/updates_provider.rs) - Starts num_of_sockets subscriptions for depth updates for the given symbol and sends received updates through the tx channel.
+* [updates_provider.rc](https://github.com/vladIev/book_order/blob/master/src/updates_provider.rs) - Handles depth updates received from `updates_provider.rc`.
